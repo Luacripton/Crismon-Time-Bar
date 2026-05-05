@@ -960,8 +960,8 @@ let actions = [
 
 /* Initial combatants */
 let combatants = [
-  { id: nextId++, name: 'Dre',     speed: 100, baseSpeed: 100, progress: 0, paused: false, type: 'dre',   pendingMod: 0, barStyle: 'void' },
-  { id: nextId++, name: 'GF', speed: 85,  baseSpeed: 101,  progress: 0, paused: false, type: 'enemy', pendingMod: 0, barStyle: 'solid' },
+  { id: nextId++, name: 'Dre',  speed: 100, baseSpeed: 100, progress: 0, paused: false, type: 'dre',   pendingMod: 0, pendingActionId: null, barStyle: 'void' },
+  { id: nextId++, name: 'GF',   speed: 101, baseSpeed: 101, progress: 0, paused: false, type: 'enemy', pendingMod: 0, pendingActionId: null, barStyle: 'solid' },
 ];
 
 /* ═══════════════════════════════════════════════════════════════
@@ -984,12 +984,15 @@ const Helpers = {
     return `<span class="mod-badge mod-zero">±0%</span>`;
   },
 
-  actionOptionsHTML: selectedMod =>
-    actions.map(a =>
-      `<option value="${a.id}" ${a.mod === selectedMod ? 'selected' : ''}>
+  actionOptionsHTML: (cid) => {
+    const c = combatants.find(x => x.id === cid);
+    const selId = c ? c.pendingActionId : null;
+    return actions.map(a =>
+      `<option value="${a.id}" ${a.id === selId ? 'selected' : ''}>
         ${a.name} (${a.mod > 0 ? '+' : ''}${a.mod}%)
       </option>`
-    ).join(''),
+    ).join('');
+  },
 
   styleForBar: barStyleId =>
     BAR_STYLES.find(s => s.id === barStyleId) || BAR_STYLES[0],
@@ -1100,7 +1103,7 @@ const Render = {
       const c   = combatants.find(x => x.id === cid);
       if (!c) return;
       const prev = sel.value;
-      sel.innerHTML = Helpers.actionOptionsHTML(c.pendingMod);
+      sel.innerHTML = Helpers.actionOptionsHTML(cid);
       if (prev) sel.value = prev;
     });
   },
@@ -1186,9 +1189,8 @@ const Render = {
           class="action-select"
           data-cid="${c.id}"
           onchange="CombatantActions.selectAction(${c.id}, +this.value)"
-        >${Helpers.actionOptionsHTML(c.pendingMod)}</select>
+        >${Helpers.actionOptionsHTML(c.id)}</select>
         ${Helpers.modBadgeHTML(c.pendingMod)}
-        <span class="next-spd">Efetiva: <strong>${effSpd}</strong> · ~${tks} tks</span>
         <button class="apply-btn" onclick="CombatantActions.useAction(${c.id})">
           <svg viewBox="0 0 12 12" fill="currentColor"><path d="M7 1L3 7h4l-2 4 6-6H7z"/></svg>
           Usar ação
@@ -1251,14 +1253,12 @@ const Render = {
 
       const pctEl   = card.querySelector('.bar-pct-num');
       const speedInf= card.querySelector('.bar-speed-info');
-      const nextSpd = card.querySelector('.next-spd');
       const speedVal= card.querySelector('.speed-val');
       const tag     = card.querySelector('.status-tag');
 
       if (pctEl)    pctEl.textContent = pct + '%';
       if (speedVal) speedVal.textContent = c.baseSpeed;
       if (speedInf) speedInf.innerHTML  = `Spd efetiva: <strong>${effSpd}</strong> · ~${tks} tks`;
-      if (nextSpd)  nextSpd.innerHTML   = `Efetiva: <strong>${effSpd}</strong> · ~${tks} tks`;
 
       // Status tag
       if (tag) {
@@ -1352,12 +1352,12 @@ const WaitingOverlay = {
     const effSpd = Math.max(1, Math.round(c.baseSpeed * (1 + a.mod / 100) * 10) / 10);
     const tks    = (200 / effSpd).toFixed(1);
 
-    // Apply action: reset bar, set new speed for this reload
-    c.speed      = effSpd;
-    c.baseSpeed  = c.baseSpeed; // unchanged
-    c.pendingMod = a.mod;
-    c.progress   = 0;
-    c.paused     = false;
+    // Apply action: reset bar, use effSpd for this reload cycle only
+    c.speed           = effSpd;
+    c.pendingMod      = a.mod;
+    c.pendingActionId = a.id;
+    c.progress        = 0;
+    c.paused          = false;
 
     const color = c.type === 'dre' ? 'purple' : c.type === 'ally' ? 'green' : 'red';
     Log.add(`${c.name} usou ${a.name} → Spd efetiva ${effSpd} · próxima recarga ~${tks} tks`, color);
@@ -1389,7 +1389,7 @@ const Engine = {
     combatants.forEach(c => {
       if (c.paused || c.progress >= 100) return;
 
-      c.progress += c.baseSpeed * Engine.PROGRESS_RATE;
+      c.progress += c.speed * Engine.PROGRESS_RATE;
 
       if (c.progress >= 100) {
         c.progress = 100;
@@ -1436,7 +1436,8 @@ const CombatantActions = {
     const a = actions.find(x => x.id === actionId);
     if (!c || !a) return;
 
-    c.pendingMod = a.mod;
+    c.pendingMod      = a.mod;
+    c.pendingActionId = a.id;
 
     // Update badge + speed display without full re-render
     const card = document.getElementById(`card-${c.id}`);
@@ -1455,13 +1456,14 @@ const CombatantActions = {
     const c = combatants.find(x => x.id === cid);
     if (!c) return;
 
-    const a       = actions.find(x => x.mod === c.pendingMod) || { name: 'Ação', mod: c.pendingMod };
+    const a       = actions.find(x => x.id === c.pendingActionId) || actions.find(x => x.mod === c.pendingMod) || { name: 'Ação', mod: c.pendingMod };
     const effSpd  = Helpers.effectiveSpeed(c);
     const tks     = (200 / effSpd).toFixed(1);
 
-    c.speed      = effSpd;
-    c.progress   = 0;
-    c.pendingMod = 0;
+    c.speed           = effSpd;
+    c.progress        = 0;
+    c.pendingMod      = 0;
+    c.pendingActionId = null;
 
     const color = c.type === 'dre' ? 'purple' : c.type === 'ally' ? 'green' : 'red';
     Log.add(`${c.name} usou ${a.name} → Spd efetiva ${effSpd} · recarga ~${tks} tks`, color);
@@ -1483,9 +1485,10 @@ const CombatantActions = {
   resetOne(id) {
     const c = combatants.find(x => x.id === id);
     if (!c) return;
-    c.progress   = 0;
-    c.speed      = c.baseSpeed;
-    c.pendingMod = 0;
+    c.progress        = 0;
+    c.speed           = c.baseSpeed;
+    c.pendingMod      = 0;
+    c.pendingActionId = null;
     Log.add(`${c.name} resetado.`, 'gray');
     Render.allCards();
   },
@@ -1559,10 +1562,11 @@ const Controls = {
     document.getElementById('waiting-overlay').classList.remove('active');
 
     combatants.forEach(c => {
-      c.progress   = 0;
-      c.paused     = false;
-      c.speed      = c.baseSpeed;
-      c.pendingMod = 0;
+      c.progress        = 0;
+      c.paused          = false;
+      c.speed           = c.baseSpeed;
+      c.pendingMod      = 0;
+      c.pendingActionId = null;
     });
 
     Log.add('Combate resetado.', 'gray');
@@ -1592,7 +1596,7 @@ const Controls = {
     combatants.push({
       id: nextId++, name, speed, baseSpeed: speed,
       progress: 0, paused: !anyRunning,
-      type, pendingMod: 0, barStyle: 'solid',
+      type, pendingMod: 0, pendingActionId: null, barStyle: 'solid',
     });
 
     document.getElementById('new-name').value = '';
